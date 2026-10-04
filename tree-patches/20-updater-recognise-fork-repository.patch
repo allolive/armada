@@ -1,0 +1,53 @@
+diff --git a/system_files/usr/lib/armada/armada_os.py b/system_files/usr/lib/armada/armada_os.py
+index c4ccb3d..ac51221 100644
+--- a/system_files/usr/lib/armada/armada_os.py
++++ b/system_files/usr/lib/armada/armada_os.py
+@@ -4,7 +4,7 @@ import subprocess
+ UPDATE = "/usr/libexec/armada/armada-update"
+ SELECT = "/usr/libexec/armada/armada-select-branch"
+ CHANNELS = ("stable", "beta", "preview")
+-REPOSITORIES = ("ghcr.io/armada-os/armada", "ghcr.io/virtudude/armada")
++REPOSITORIES = ("ghcr.io/armada-os/armada", "ghcr.io/virtudude/armada", "ghcr.io/allolive/armada")
+ 
+ 
+ def command(arguments, timeout=15):
+diff --git a/system_files/usr/lib/armada/update-lib b/system_files/usr/lib/armada/update-lib
+index 7d646ad..8e34bf0 100644
+--- a/system_files/usr/lib/armada/update-lib
++++ b/system_files/usr/lib/armada/update-lib
+@@ -3,6 +3,8 @@
+ 
+ ARMADA_CANONICAL_REGISTRY="ghcr.io/armada-os/armada"
+ ARMADA_LEGACY_REGISTRY="ghcr.io/virtudude/armada"
++# Our fork. Its channels work like upstream's, so Steam's branch picker applies.
++ARMADA_FORK_REGISTRY="ghcr.io/allolive/armada"
+ ARMADA_CHANNEL_STATE="/var/lib/armada/update-channel"
+ ARMADA_CHANNELS="stable beta testing"
+ ARMADA_OSTREE_REPO="/ostree/repo"
+@@ -48,7 +50,7 @@ armada_registry_from_ref() {
+     r="${r%%@*}"
+     [[ "${r##*/}" == *:* ]] && r="${r%:*}"
+     case "$r" in
+-        "$ARMADA_CANONICAL_REGISTRY"|"$ARMADA_LEGACY_REGISTRY") echo "$r" ;;
++        "$ARMADA_CANONICAL_REGISTRY"|"$ARMADA_LEGACY_REGISTRY"|"$ARMADA_FORK_REGISTRY") echo "$r" ;;
+     esac
+ }
+ 
+@@ -70,7 +72,7 @@ armada_repository_from_ref() {
+ armada_steam_channels_apply() {
+     local channel
+     case "$1" in
+-        "$ARMADA_CANONICAL_REGISTRY"|"$ARMADA_LEGACY_REGISTRY") ;;
++        "$ARMADA_CANONICAL_REGISTRY"|"$ARMADA_LEGACY_REGISTRY"|"$ARMADA_FORK_REGISTRY") ;;
+         *) return 1 ;;
+     esac
+     for channel in ${ARMADA_CHANNELS}; do
+@@ -260,7 +262,7 @@ armada_update_target() {
+     if repository="$(armada_repository_from_ref "$ref")"; then
+         if [[ -z "$booted" ]]; then
+             case "$repository" in
+-                "$ARMADA_CANONICAL_REGISTRY"|"$ARMADA_LEGACY_REGISTRY") ;;
++                "$ARMADA_CANONICAL_REGISTRY"|"$ARMADA_LEGACY_REGISTRY"|"$ARMADA_FORK_REGISTRY") ;;
+                 *) return 1 ;;
+             esac
+         fi
