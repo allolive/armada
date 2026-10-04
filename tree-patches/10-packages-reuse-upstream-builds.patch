@@ -1,5 +1,5 @@
 diff --git a/.github/workflows/packages.yml b/.github/workflows/packages.yml
-index f737723..53f46e5 100644
+index f737723..0695527 100644
 --- a/.github/workflows/packages.yml
 +++ b/.github/workflows/packages.yml
 @@ -23,7 +23,7 @@ jobs:
@@ -11,7 +11,7 @@ index f737723..53f46e5 100644
      outputs:
        matrix: ${{ steps.resolve.outputs.matrix }}
        build_args: ${{ steps.resolve.outputs.build_args }}
-@@ -59,8 +59,16 @@ jobs:
+@@ -59,8 +59,19 @@ jobs:
                *)                            runner=ubuntu-24.04-arm ;;
              esac
  
@@ -21,9 +21,12 @@ index f737723..53f46e5 100644
 +            upstream_ref="ghcr.io/armada-os/armada/pkg/${pkg}:${hash}"
              if skopeo inspect --raw "docker://${ref}" >/dev/null 2>&1; then
                echo "::notice::${pkg} already built (${hash})"
++            # Upstream is read anonymously: with this repository's token, ghcr
++            # denies most of another owner's packages instead of treating the
++            # request as a public pull.
 +            elif [ "${ref}" != "${upstream_ref}" ] &&
-+                 skopeo inspect --raw "docker://${upstream_ref}" >/dev/null 2>&1 &&
-+                 skopeo copy --all "docker://${upstream_ref}" "docker://${ref}"; then
++                 skopeo inspect --no-creds --raw "docker://${upstream_ref}" >/dev/null 2>&1 &&
++                 skopeo copy --all --src-no-creds "docker://${upstream_ref}" "docker://${ref}"; then
 +              echo "::notice::${pkg} copied from upstream (${hash})"
              else
                echo "::notice::${pkg} needs building (${hash})"
