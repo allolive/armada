@@ -1,0 +1,40 @@
+diff --git a/system_files/etc/containers/policy.json b/system_files/etc/containers/policy.json
+index c70cf81..fd8197f 100644
+--- a/system_files/etc/containers/policy.json
++++ b/system_files/etc/containers/policy.json
+@@ -6,6 +6,15 @@
+     ],
+     "transports": {
+         "docker": {
++            "ghcr.io/allolive/armada": [
++                {
++                    "type": "sigstoreSigned",
++                    "keyPaths": ["/etc/pki/containers/allolive.pub"],
++                    "signedIdentity": {
++                        "type": "matchRepository"
++                    }
++                }
++            ],
+             "ghcr.io/virtudude/armada": [
+                 {
+                     "type": "sigstoreSigned",
+diff --git a/system_files/etc/containers/registries.d/ghcr-armada.yaml b/system_files/etc/containers/registries.d/ghcr-armada.yaml
+index f4c0ab9..89456c1 100644
+--- a/system_files/etc/containers/registries.d/ghcr-armada.yaml
++++ b/system_files/etc/containers/registries.d/ghcr-armada.yaml
+@@ -3,3 +3,5 @@ docker:
+     use-sigstore-attachments: true
+   ghcr.io/armada-os/armada:
+     use-sigstore-attachments: true
++  ghcr.io/allolive/armada:
++    use-sigstore-attachments: true
+diff --git a/system_files/etc/pki/containers/allolive.pub b/system_files/etc/pki/containers/allolive.pub
+new file mode 100644
+index 0000000..f2f9b87
+--- /dev/null
++++ b/system_files/etc/pki/containers/allolive.pub
+@@ -0,0 +1,4 @@
++-----BEGIN PUBLIC KEY-----
++MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE8cqe3pl94SGJy9aV5pLtKqxaTTIw
++RujTPMMbm080JIqvvLbjC39KClfUptu5nUJgatXNOrrKxlya+YZ/F17icQ==
++-----END PUBLIC KEY-----
