@@ -42,9 +42,10 @@ Current changes:
   branch picker and the Armada OS page treat our repository like upstream's.
 - **Refresh rate** — kernel `0138` adds 30..120Hz modes to the ICNA3520 panel
   (rebased onto upstream's 7.2.6 driver, change lines identical to the version
-  that was verified on the device); gamescope `9001` prefers an exact panel rate
-  over refresh doubling; tree-patch `30` gives the panel's gamescope profile a
-  `dynamic_modegen` and the 40/50/60/120 slider rates.
+  that ran on the device); gamescope-session `9001` lets the Odin 3 use them
+  (upstream's quirk pinned it to 60/120); gamescope `9001` prefers an exact panel
+  rate over refresh doubling. This is the setup that ran daily from 2026-08-12,
+  then as a user environment.d override.
 - **GPU undervolt** — `a6xx_uv` is built inside the kernel package (`40`), so it
   always matches its kernel; the `adreno-uv` Decky plugin and its `gpustress`
   load generator are built into the image (`41`) and the plugin's
