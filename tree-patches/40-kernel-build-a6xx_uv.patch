@@ -1,0 +1,25 @@
+diff --git a/packages/kernel/scripts/build-kernel.sh b/packages/kernel/scripts/build-kernel.sh
+index eba7fd2..b048088 100755
+--- a/packages/kernel/scripts/build-kernel.sh
++++ b/packages/kernel/scripts/build-kernel.sh
+@@ -238,6 +238,20 @@ mkdir -p "${STAGE}/lib/modules/${KVER}/dtb/qcom"
+ echo "==> Staging vmlinuz + modules + DTBs"
+ cp arch/arm64/boot/Image "${STAGE}/lib/modules/${KVER}/vmlinuz"
+ make "${MAKE_ARGS[@]}" INSTALL_MOD_PATH="${STAGE}" INSTALL_MOD_STRIP=1 modules_install >/dev/null
++
++# a6xx_uv - the Odin 3 GPU undervolt, an out-of-tree module. Built here, against
++# this tree and its Module.symvers, so it can never be paired with a kernel it
++# was not compiled for: vermagic cannot tell two 7.x builds apart, and the
++# module dereferences struct a6xx_gmu with offsets fixed at compile time.
++UVMOD_DIR="${REPO_ROOT}/uvmod"
++if [ -d "${UVMOD_DIR}" ]; then
++    echo "==> Building a6xx_uv"
++    make "${MAKE_ARGS[@]}" M="${UVMOD_DIR}" modules
++    make "${MAKE_ARGS[@]}" M="${UVMOD_DIR}" INSTALL_MOD_PATH="${STAGE}" INSTALL_MOD_STRIP=1 \
++        INSTALL_MOD_DIR=extra modules_install >/dev/null
++    ls "${STAGE}/lib/modules/${KVER}/extra/"a6xx_uv.ko* >/dev/null \
++        || { echo "ERROR: a6xx_uv built but not staged"; exit 1; }
++fi
+ rm -f "${STAGE}/lib/modules/${KVER}/build" "${STAGE}/lib/modules/${KVER}/source"
+ 
+ for dts in "${DTS_DIR}"/*.dts; do

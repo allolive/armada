@@ -65,6 +65,31 @@ for p in "$SRC"/tree-patches/*.patch; do
 done
 shopt -u nullglob
 
+# ---------------------------------------------------------- kernel series
+# Our kernel patches are overlay files, but the kernel applies only what
+# patches/series names. Appending is kept out of tree-patches/ on purpose: a
+# patch against the end of series would break every time upstream adds one.
+series=packages/kernel/patches/series
+if [ -s "$SRC/kernel-series.append" ]; then
+  printf '\n# ============== odin3 (allolive/armada) ==============\n' >> "$series"
+  while IFS= read -r line; do
+    name="${line%%#*}"; name="${name//[[:space:]]/}"
+    if [ -n "$name" ]; then
+      [ -f "packages/kernel/patches/$name" ] || {
+        echo "::error::kernel-series.append names $name, which is not in packages/kernel/patches"
+        exit 1
+      }
+      if grep -qxF "$name" <(sed 's/#.*//; s/[[:space:]]//g' "$series"); then
+        echo "::error::$name is already in upstream's series - drop it from kernel-series.append"
+        exit 1
+      fi
+      echo "  series  $name"
+      applied=$((applied + 1))
+    fi
+    printf '%s\n' "$line" >> "$series"
+  done < "$SRC/kernel-series.append"
+fi
+
 if [ "$added" -eq 0 ] && [ "$applied" -eq 0 ]; then
   echo "::error::nothing was assembled - no files added and no tree-patches."
   echo "         A build from this tree would be stock Armada published as ours."

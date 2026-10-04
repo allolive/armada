@@ -1,0 +1,3 @@
+# ICNA3520 30..120Hz modes for the Odin 3 panel; the refresh slider and
+# gamescope's dynamic_modegen depend on these modes existing in the kernel.
+0138-drm-panel-icna3520-add-30-120Hz-modes.patch

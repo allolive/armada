@@ -1,0 +1,260 @@
+From: Armada <noreply@armada.local>
+Subject: [PATCH] drm/panel: icna3520: add 30..120Hz modes
+
+The ICNA3520 is a command-mode panel, so DRM mode timings do not drive scanout
+directly. The refresh rate is set by the front porch handed to the DDIC in the
+sub-120Hz init path: bytes 12..13 of 0xB3 are 0x07D6 == 2006, exactly the 60Hz
+mode's front porch. Every rate is the same pixel clock with a different porch.
+
+Measured on an Odin 3 via the DPU vsync counter and dsi_isr, 50/75/100Hz land
+exactly, so the DDIC derives its refresh linearly from that field:
+
+    vfp = round(267911000 / (1129 * rate)) - 1949
+
+which reproduces the stock entries exactly (120Hz -> 28, 60Hz -> 2006).
+
+A rate only works if it has an entry here: icna35xx_get_current_mode()
+drm_mode_match()es the active mode against this table, and a mode not in it
+falls through to index 0 (120Hz), leaving the DDIC untouched.
+
+== Residue constraint ==
+
+A front porch congruent to 2 mod 4 (vtotal congruent to 3 mod 4) makes the
+panel render visibly elevated black levels. Found by bisecting a user-visible
+artifact: confirmed bad at 31, 33, 34, 43, 46, 49, 52, 55, 57, 58, 62, 63, 72,
+73, 74, 83 and 86Hz, and clean at every rate tested outside the class. A
+contiguous sweep of 30..46 matched the predicted set exactly, and 83/86 were
+predicted before being tested.
+
+60Hz is the sole exception: it sits in the class and looks fine. That fits the
+else branch writing the vendor's 60Hz calibration -- the other 0xB3 fields and
+0x48 are tuned for 60, so at exactly 60 nothing is mismatched. It also means
+the stock 60Hz porch of 2006, itself in the class, was never a defect.
+
+vtotal is nudged one line to leave the class, costing at most 1.6ppm of rate
+accuracy -- about one frame of drift every five hours. Every rate keeps its
+integer drm_mode_vrefresh() slot. The mechanism is undocumented to us; that it
+is one residue class in four rather than a parity suggests a hardware alignment
+requirement rather than anything about frequency.
+
+== NTSC slots ==
+
+    content    slot   panel rate   ratio
+    23.976fps    72   71.9280Hz     3:1
+    24.000fps    48   48.0000Hz     2:1
+    29.97fps     60   59.9400Hz     2:1
+    30.000fps    30   30.0000Hz     1:1
+
+drm_mode_vrefresh() is integer, so each slot holds one mode. Putting 23.976 in
+slot 24 would have cost exact 24; at 3:1 it lands in slot 72 with the same
+precision, leaving 48 exact. .clock is given per mode because the rates are no
+longer all integers, so the table macro takes a clock rather than a rate.
+
+Only modes[0] (120Hz) is DRM_MODE_TYPE_PREFERRED, so everything else is opt-in.
+
+120Hz is left exactly as the panel shipped it: same porch (28), same vtotal
+(1977), and the clock pinned to 267843 so it matches the original expression
+verbatim. It also takes the cur_vrefresh == 120 branch, whose 0xB3 payload is
+fixed rather than porch-derived, so the DDIC is configured identically to stock.
+
+Note for userspace: gamescope's refresh doubling picks the highest advertised
+rate that is an integer multiple of the target FPS, so advertising everything
+makes 50fps select 100Hz and 30fps select 120Hz. Keep the advertised list
+curated or apply the gamescope patch preferring an exact rate.
+
+The 0xB3 write moves to mipi_dsi_generic_write_multi() because the _seq_ macro
+stashes its varargs in a `static const u8[]` and cannot carry a runtime value.
+
+Unverified: 0x48 is 0x00 at 120Hz and 0x10 below it, assumed a generic
+low-refresh select rather than 60Hz-specific, and reused as-is.
+
+--- a/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
++++ b/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
+@@ -200,7 +200,8 @@
+ 	u8 bl_payload[] = { 0x51, brightness >> 8, brightness & 0xff };
+ 
+ 	int cur_mode = icna35xx_get_current_mode(pinfo);
+-	int cur_vrefresh = drm_mode_vrefresh(&pinfo->desc->modes[cur_mode]);
++	const struct drm_display_mode *cur = &pinfo->desc->modes[cur_mode];
++	int cur_vrefresh = drm_mode_vrefresh(cur);
+ 
+ 	pinfo->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
+ 
+@@ -221,11 +222,22 @@
+                 0x00, 0xD8, 0x00, 0x1C, 0x00, 0x4C);
+ 	}
+ 	else {
++		/*
++		 * Bytes 12..13 of 0xB3 are the front porch the DDIC derives its
++		 * refresh from. Measured on an Odin 3: 50, 75 and 100Hz all land
++		 * exactly, so the relationship is linear across the range.
++		 */
++		u16 vfp = cur->vsync_start - cur->vdisplay;
++		u8 b3_payload[] = {
++			0xB3,
++			0x00, 0xDB, 0x00, 0x1C, 0x00, 0x1C, 0x00, 0x00,
++			0xDB, 0x00, 0x1C, (u8)(vfp >> 8), (u8)(vfp & 0xff), 0x00
++		};
++
+ 		mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x10);
+ 		mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x00);
+-		mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xB3, 
+-                0x00, 0xDB, 0x00, 0x1C, 0x00, 0x1C, 0x00, 0x00,
+-				0xDB, 0x00, 0x1C, 0x07, 0xD6, 0x00);
++		mipi_dsi_generic_write_multi(&dsi_ctx, b3_payload,
++					     sizeof(b3_payload));
+ 	}
+ 
+ 	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x01);
+@@ -387,31 +399,127 @@
+ 	}
+ };
+ 
++/*
++ * Every rate is the same pixel clock with a stretched vertical front porch;
++ * the DDIC derives its refresh from that porch (see icna3520_init_sequence):
++ *     vfp = round(267911000 / (1129 * rate)) - 1949
++ *
++ * Constraint found on hardware: a front porch congruent to 2 mod 4 (vtotal
++ * congruent to 3 mod 4) makes the panel render elevated black levels.
++ * Confirmed bad at 31, 33, 34, 43, 46, 49, 52, 55, 57, 58, 62, 63, 72, 73,
++ * 74, 83 and 86Hz; every rate tested outside the class is clean. 60Hz is the
++ * sole exception -- it sits in the class and looks fine, which fits the else
++ * branch of the init sequence writing the vendor's 60Hz calibration. vtotal
++ * is nudged one line to avoid the class, costing at most 1.6ppm.
++ *
++ * Two slots carry an NTSC rate rather than the exact integer so film and
++ * broadcast content runs judder-free; userspace still sees 72 and 60 via
++ * drm_mode_vrefresh(). .clock is per mode as the rates are not all integers.
++ */
++#define ICNA3520_MODE(clk, vfp) {					\
++	.clock = (clk),							\
++	.hdisplay = 1080,						\
++	.hsync_start = 1080 + 24,					\
++	.hsync_end = 1080 + 24 + 1,					\
++	.htotal = 1080 + 24 + 1 + 24,					\
++	.vdisplay = 1920,						\
++	.vsync_start = 1920 + (vfp),					\
++	.vsync_end = 1920 + (vfp) + 1,					\
++	.vtotal = 1920 + (vfp) + 1 + 28,				\
++}
++
+ static const struct drm_display_mode icna3520_modes[] = {
+-	{
+-		/* 120Hz */
+-		.clock = (1080 + 24 + 1 + 24) * (1920 + 28 + 1 + 28) * 120 / 1000,
+-		.hdisplay = 1080,
+-		.hsync_start = 1080 + 24,
+-		.hsync_end = 1080 + 24 + 1,
+-		.htotal = 1080 + 24 + 1 + 24,
+-		.vdisplay = 1920,
+-		.vsync_start = 1920 + 28,
+-		.vsync_end = 1920 + 28 + 1,
+-		.vtotal = 1920 + 28 + 1 + 28,
+-	},
+-	{
+-		/* 60Hz */
+-		.clock = (1080 + 24 + 1 + 24) * (1920 + 2006 + 1 + 28) * 60 / 1000,
+-		.hdisplay = 1080,
+-		.hsync_start = 1080 + 24,
+-		.hsync_end = 1080 + 24 + 1,
+-		.htotal = 1080 + 24 + 1 + 24,
+-		.vdisplay = 1920,
+-		.vsync_start = 1920 + 2006,
+-		.vsync_end = 1920 + 2006 + 1,
+-		.vtotal = 1920 + 2006 + 1 + 28,
+-	}
++	ICNA3520_MODE(267843,   28),	/* 120Hz - stock timings verbatim */
++	ICNA3520_MODE(267896,   45),	/* 119Hz */
++	ICNA3520_MODE(268043,   63),	/* 118Hz */
++	ICNA3520_MODE(267885,   79),	/* 117Hz */
++	ICNA3520_MODE(267952,   97),	/* 116Hz */
++	ICNA3520_MODE(267979,  115),	/* 115Hz */
++	ICNA3520_MODE(267966,  133),	/* 114Hz */
++	ICNA3520_MODE(267912,  151),	/* 113Hz */
++	ICNA3520_MODE(268070,  171),	/* 112Hz */
++	ICNA3520_MODE(267932,  189),	/* 111Hz */
++	ICNA3520_MODE(267878,  208),	/* 110Hz */
++	ICNA3520_MODE(267904,  228),	/* 109Hz */
++	ICNA3520_MODE(267885,  248),	/* 108Hz */
++	ICNA3520_MODE(267941,  269),	/* 107Hz */
++	ICNA3520_MODE(268070,  291),	/* 106Hz */
++	ICNA3520_MODE(267912,  311),	/* 105Hz */
++	ICNA3520_MODE(267943,  333),	/* 104Hz */
++	ICNA3520_MODE(267925,  355),	/* 103Hz */
++	ICNA3520_MODE(267858,  377),	/* 102Hz */
++	ICNA3520_MODE(267854,  400),	/* 101Hz */
++	ICNA3520_MODE(267912,  424),	/* 100Hz */
++	ICNA3520_MODE(267915,  448),	/* 99Hz */
++	ICNA3520_MODE(267864,  472),	/* 98Hz */
++	ICNA3520_MODE(267869,  497),	/* 97Hz */
++	ICNA3520_MODE(267925,  523),	/* 96Hz */
++	ICNA3520_MODE(267923,  549),	/* 95Hz */
++	ICNA3520_MODE(267862,  575),	/* 94Hz */
++	ICNA3520_MODE(267952,  603),	/* 93Hz */
++	ICNA3520_MODE(267979,  631),	/* 92Hz */
++	ICNA3520_MODE(267943,  659),	/* 91Hz */
++	ICNA3520_MODE(267946,  688),	/* 90Hz */
++	ICNA3520_MODE(267882,  717),	/* 89Hz */
++	ICNA3520_MODE(267952,  748),	/* 88Hz */
++	ICNA3520_MODE(267952,  779),	/* 87Hz */
++	ICNA3520_MODE(267979,  811),	/* 86Hz */
++	ICNA3520_MODE(267934,  843),	/* 85Hz */
++	ICNA3520_MODE(267912,  876),	/* 84Hz */
++	ICNA3520_MODE(268002,  911),	/* 83Hz */
++	ICNA3520_MODE(267921,  945),	/* 82Hz */
++	ICNA3520_MODE(267946,  981),	/* 81Hz */
++	ICNA3520_MODE(267889, 1017),	/* 80Hz */
++	ICNA3520_MODE(267930, 1055),	/* 79Hz */
++	ICNA3520_MODE(267885, 1093),	/* 78Hz */
++	ICNA3520_MODE(267928, 1133),	/* 77Hz */
++	ICNA3520_MODE(267880, 1173),	/* 76Hz */
++	ICNA3520_MODE(267912, 1215),	/* 75Hz */
++	ICNA3520_MODE(268016, 1259),	/* 74Hz */
++	ICNA3520_MODE(268020, 1303),	/* 73Hz */
++	ICNA3520_MODE(267982, 1351),	/* 71.928Hz - 23.976 x3 */
++	ICNA3520_MODE(267891, 1393),	/* 71Hz */
++	ICNA3520_MODE(267912, 1441),	/* 70Hz */
++	ICNA3520_MODE(267979, 1491),	/* 69Hz */
++	ICNA3520_MODE(267934, 1541),	/* 68Hz */
++	ICNA3520_MODE(267928, 1593),	/* 67Hz */
++	ICNA3520_MODE(267952, 1647),	/* 66Hz */
++	ICNA3520_MODE(268002, 1703),	/* 65Hz */
++	ICNA3520_MODE(267925, 1759),	/* 64Hz */
++	ICNA3520_MODE(268007, 1819),	/* 63Hz */
++	ICNA3520_MODE(267952, 1879),	/* 62Hz */
++	ICNA3520_MODE(267900, 1941),	/* 61Hz */
++	ICNA3520_MODE(267982, 2011),	/* 59.940Hz - 29.97 x2 */
++	ICNA3520_MODE(267909, 2073),	/* 59Hz */
++	ICNA3520_MODE(267952, 2143),	/* 58Hz */
++	ICNA3520_MODE(267966, 2215),	/* 57Hz */
++	ICNA3520_MODE(267880, 2288),	/* 56Hz */
++	ICNA3520_MODE(268002, 2367),	/* 55Hz */
++	ICNA3520_MODE(267885, 2445),	/* 54Hz */
++	ICNA3520_MODE(267890, 2528),	/* 53Hz */
++	ICNA3520_MODE(267943, 2615),	/* 52Hz */
++	ICNA3520_MODE(267915, 2704),	/* 51Hz */
++	ICNA3520_MODE(267912, 2797),	/* 50Hz */
++	ICNA3520_MODE(267975, 2895),	/* 49Hz */
++	ICNA3520_MODE(267925, 2995),	/* 48Hz */
++	ICNA3520_MODE(267915, 3100),	/* 47Hz */
++	ICNA3520_MODE(267979, 3211),	/* 46Hz */
++	ICNA3520_MODE(267895, 3324),	/* 45Hz */
++	ICNA3520_MODE(267903, 3444),	/* 44Hz */
++	ICNA3520_MODE(267979, 3571),	/* 43Hz */
++	ICNA3520_MODE(267912, 3701),	/* 42Hz */
++	ICNA3520_MODE(267921, 3839),	/* 41Hz */
++	ICNA3520_MODE(267889, 3983),	/* 40Hz */
++	ICNA3520_MODE(267929, 4136),	/* 39Hz */
++	ICNA3520_MODE(267923, 4296),	/* 38Hz */
++	ICNA3520_MODE(267890, 4464),	/* 37Hz */
++	ICNA3520_MODE(267925, 4643),	/* 36Hz */
++	ICNA3520_MODE(267912, 4831),	/* 35Hz */
++	ICNA3520_MODE(267934, 5031),	/* 34Hz */
++	ICNA3520_MODE(267952, 5243),	/* 33Hz */
++	ICNA3520_MODE(267925, 5467),	/* 32Hz */
++	ICNA3520_MODE(267952, 5707),	/* 31Hz */
++	ICNA3520_MODE(267912, 5961)	/* 30Hz */
+ };
+ 
+ static const struct drm_display_mode mangmi_pocket_max_modes[] = {

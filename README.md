@@ -27,7 +27,8 @@ upstream's, unmodified.
 |---|---|---|
 | `overlay/` | files we **add**, at their path in the tree | refused if upstream already has the path |
 | `tree-patches/` | changes to files upstream **owns**, applied in name order | plain `git apply`; one that no longer applies stops the build |
-| `scripts/odin3-assemble.sh` | lays both over an upstream checkout | |
+| `kernel-series.append` | lines appended to `packages/kernel/patches/series` | refused if upstream's series already names the patch |
+| `scripts/odin3-assemble.sh` | lays all three over an upstream checkout | |
 
 Assembly also refuses a tree whose `policy.json` does not trust
 `ghcr.io/allolive/armada`: such an image installs fine and then rejects every
@@ -35,10 +36,20 @@ update after it.
 
 Current changes:
 
-- `10-packages-reuse-upstream-builds` — copy any package upstream has already
-  built with the same content hash, so only packages we change get built here.
-- `20-updater-recognise-fork-repository` — Steam's branch picker and the Armada
-  OS page treat our repository like upstream's.
+- **Signing** (`01`) — the image trusts `ghcr.io/allolive/armada`, signed with our key.
+- **Build plumbing** (`10`, `20`) — copy any package upstream has already built
+  with the same content hash, so only packages we change get built here; Steam's
+  branch picker and the Armada OS page treat our repository like upstream's.
+- **Refresh rate** — kernel `0138` adds 30..120Hz modes to the ICNA3520 panel
+  (rebased onto upstream's 7.2.6 driver, change lines identical to the version
+  that was verified on the device); gamescope `9001` prefers an exact panel rate
+  over refresh doubling; tree-patch `30` gives the panel's gamescope profile a
+  `dynamic_modegen` and the 40/50/60/120 slider rates.
+- **GPU undervolt** — `a6xx_uv` is built inside the kernel package (`40`), so it
+  always matches its kernel; the `adreno-uv` Decky plugin and its `gpustress`
+  load generator are built into the image (`41`) and the plugin's
+  `bin/a6xx_uv.ko` links to the module in `/usr/lib/modules`. Nothing is applied
+  until a profile is selected in the plugin.
 
 ## Working on it locally
 

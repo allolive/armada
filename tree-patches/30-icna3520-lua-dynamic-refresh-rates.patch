@@ -1,0 +1,62 @@
+diff --git a/system_files/usr/share/gamescope/scripts/10-armada/ayn.icna3520.oled.lua b/system_files/usr/share/gamescope/scripts/10-armada/ayn.icna3520.oled.lua
+index 72856b4..89e5603 100644
+--- a/system_files/usr/share/gamescope/scripts/10-armada/ayn.icna3520.oled.lua
++++ b/system_files/usr/share/gamescope/scripts/10-armada/ayn.icna3520.oled.lua
+@@ -1,8 +1,19 @@
+ -- ICNA3520 OLED used by the AYN Odin 3 and Thor top displays. It exposes no EDID,
+ -- so gamescope synthesizes one and identifies the display through
+ -- GAMESCOPE_INTERNAL_DEVICE_ID; this profile supplies the panel's
+--- colorimetry and HDR capability. Refresh rates come from the kernel
+--- mode list. Steam owns HDR behavior at runtime.
++-- colorimetry, HDR capability and refresh rates. Steam owns HDR behavior
++-- at runtime.
++--
++-- The panel changes refresh by stretching the vertical front porch at a
++-- constant pixel clock, which is how the stock 60Hz mode is built out of
++-- the 120Hz one. dynamic_modegen below does the same for rates the kernel
++-- does not expose, so the Steam refresh slider behaves like the Deck's.
++-- It is analytic and derives everything from the base mode, so it follows
++-- whichever timings the panel actually reports.
++--
++-- This needs the kernel to push the new porch to the panel controller --
++-- see kernel patch 0138, which derives the 0xB3 blanking bytes from the
++-- active mode. Without it, generated modes scan at the wrong porch.
+ gamescope.config.known_displays.armada_ayn_icna3520_oled = {
+     pretty_name = "AYN ICNA3520 internal OLED",
+     colorimetry = {
+@@ -18,6 +29,35 @@ gamescope.config.known_displays.armada_ayn_icna3520_oled = {
+         max_frame_average_luminance = 650,
+         min_content_light_level = 0.002,
+     },
++    -- Only rates listed here are offered to Steam. 60 and 120 are real
++    -- kernel modes and get resolved by find_mode() before the generator is
++    -- consulted, so they keep their exact stock timings. Extend this list
++    -- once a rate has been checked on hardware for flicker -- the generator
++    -- itself is analytic and handles anything up to the base rate.
++    dynamic_refresh_rates = {
++        40, 50, 60, 120
++    },
++
++    dynamic_modegen = function(base_mode, refresh)
++        local mode = base_mode
++
++        -- Everything except the front porch is fixed: vdisplay + vsync + vbp.
++        local fixed_lines = mode.vtotal - (mode.vsync_start - mode.vdisplay)
++        local vtotal = math.floor((mode.clock * 1000) / (mode.htotal * refresh))
++        local vfp = vtotal - fixed_lines
++
++        if vfp < 1 then
++            warn("[icna3520] "..refresh.."Hz is above the panel's base rate, ignoring")
++            return base_mode
++        end
++
++        gamescope.modegen.adjust_front_porch(mode, vfp)
++        mode.vrefresh = gamescope.modegen.calc_vrefresh(mode)
++
++        debug("[icna3520] "..refresh.."Hz -> front porch "..vfp..", vtotal "..mode.vtotal)
++        return mode
++    end,
++
+     matches = function(display)
+         if (display.device_id == "ayn-odin-3" or display.device_id == "ayn-thor")
+             and display.internal and not display.has_edid then

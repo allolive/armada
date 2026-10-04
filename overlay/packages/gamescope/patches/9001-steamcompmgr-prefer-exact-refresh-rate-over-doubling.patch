@@ -1,0 +1,76 @@
+From: Armada <noreply@armada.local>
+Subject: [PATCH] steamcompmgr: prefer an exact refresh rate over refresh doubling
+
+_update_app_target_refresh_cycle() picks the panel rate by walking the valid
+rates high-to-low and taking the first exact multiple of the target FPS:
+
+    // Find highest mode to do refresh doubling with.
+    for ( auto rate = rates.rbegin(); rate != rates.rend(); rate++ )
+        if (*rate % target_fps == 0) { ... }
+
+With {50,60,120} on the Odin 3 that means a 60fps target selects 120Hz, and a
+40fps target also selects 120Hz. That is a deliberate upstream trade: a frame
+held for an integer number of vblanks paces identically either way, and the
+higher rate cuts latency and keeps the UI smooth.
+
+On a battery-powered handheld the other side of that trade is often preferred
+-- 60Hz on the panel rather than 120Hz is a real power saving, and the user
+asking for 60 generally means the panel too. Take an exact rate when the panel
+has one natively, and fall back to doubling otherwise.
+
+Gated on a ConVar defaulting to true, so the old behaviour is one runtime
+command away and the two can be A/B compared without a rebuild:
+
+    gamescopectl prefer_exact_refresh_rate 0
+
+Rates with no exact entry are unaffected: a 45fps target on {50,60,120} still
+falls through to the doubling loop exactly as before. 50 already selected 50
+because it is not a divisor of 120, so only 60 and 40 change behaviour.
+
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -956,12 +956,20 @@
+ static const uint64_t g_uDynamicRefreshDelay = 600'000'000; // 600ms
+ 
+ static int g_nCombinedAppRefreshCycleOverride[gamescope::GAMESCOPE_SCREEN_TYPE_COUNT] = { 0, 0 };
+ bool g_nCombinedAppRefreshCycleChangeRefresh[gamescope::GAMESCOPE_SCREEN_TYPE_COUNT] = { true, true };
+ bool g_nCombinedAppRefreshCycleChangeFPS[gamescope::GAMESCOPE_SCREEN_TYPE_COUNT] = { true, true };
+ 
++// Refresh doubling runs the panel at the highest multiple of the target FPS,
++// which trades power for lower latency -- a 60fps target holds a 120Hz panel.
++// On a battery-powered handheld the opposite is often wanted, so prefer an
++// exact rate when the panel actually has one. Toggle live with:
++//     gamescopectl prefer_exact_refresh_rate 0
++gamescope::ConVar<bool> cv_prefer_exact_refresh_rate( "prefer_exact_refresh_rate", true,
++	"Prefer a refresh rate equal to the target FPS over refresh doubling." );
++
+ static void _update_app_target_refresh_cycle()
+ {
+ 	if ( !GetBackend()->GetCurrentConnector() )
+ 		return;
+ 
+ 	gamescope::GamescopeScreenType type = GetBackend()->GetCurrentConnector()->GetScreenType();
+@@ -982,13 +990,22 @@
+ 	}
+ 
+ 	if ( g_nCombinedAppRefreshCycleChangeRefresh[ type ] )
+ 	{
+ 		auto rates = GetBackend()->GetCurrentConnector()->GetValidDynamicRefreshRates();
+ 
+-		// Find highest mode to do refresh doubling with.
++		// An exact match is what the user literally asked for; take it if the
++		// panel supports that rate natively.
++		if ( cv_prefer_exact_refresh_rate &&
++		     gamescope::Algorithm::Contains( rates, uint32_t( target_fps ) ) )
++		{
++			g_nDynamicRefreshRate[ type ] = target_fps;
++			return;
++		}
++
++		// Otherwise fall back to refresh doubling: highest multiple of the target.
+ 		for ( auto rate = rates.rbegin(); rate != rates.rend(); rate++ )
+ 		{
+ 			if (*rate % target_fps == 0)
+ 			{
+ 				g_nDynamicRefreshRate[ type ] = *rate;
+ 				return;

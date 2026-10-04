@@ -1,0 +1,61 @@
+diff --git a/Containerfile b/Containerfile
+index d8abd2f..1d39c54 100644
+--- a/Containerfile
++++ b/Containerfile
+@@ -91,6 +91,21 @@ COPY decky/armada-store/package.json decky/armada-store/package-lock.json ./
+ RUN npm ci
+ COPY decky/armada-store/ ./
+ RUN npm run build
++# adreno-uv has no lockfile yet, so its transitive dependencies resolve at build
++# time; its direct ones are pinned exactly in package.json.
++WORKDIR /build/adreno-uv
++COPY decky/adreno-uv/package.json ./
++RUN npm install --no-audit --no-fund
++COPY decky/adreno-uv/ ./
++RUN npm run build
++
++# gpustress, the auto-tuner's load generator. Built against the base image's
++# Mesa headers; at runtime it links the image's libEGL/libGLESv2/libgbm.
++FROM ${BASE_IMAGE} AS adreno-uv-stress
++COPY decky/adreno-uv/stress/gpustress.c /build/
++RUN dnf -y install gcc libglvnd-devel mesa-libEGL-devel mesa-libgbm-devel && \
++    mkdir -p /out && \
++    gcc -O2 -Wall -o /out/gpustress /build/gpustress.c -lEGL -lGLESv2 -lgbm
+ 
+ FROM scratch AS ctx
+ COPY abl /abl/
+@@ -130,6 +145,8 @@ RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
+     --mount=type=bind,from=umtp-responder,source=/rpms,target=/packages/umtp-responder \
+     --mount=type=bind,from=decky-build,source=/build/armada-control/dist,target=/packages/decky-dist \
+     --mount=type=bind,from=decky-build,source=/build/armada-store/dist,target=/packages/decky-store-dist \
++    --mount=type=bind,from=decky-build,source=/build/adreno-uv/dist,target=/packages/adreno-uv-dist \
++    --mount=type=bind,from=adreno-uv-stress,source=/out,target=/packages/adreno-uv-stress \
+     --mount=type=cache,dst=/var/cache \
+     --mount=type=cache,dst=/var/log \
+     --mount=type=tmpfs,dst=/tmp \
+diff --git a/build_files/45-install-decky-plugins.sh b/build_files/45-install-decky-plugins.sh
+index 91e9c7d..7e108c8 100755
+--- a/build_files/45-install-decky-plugins.sh
++++ b/build_files/45-install-decky-plugins.sh
+@@ -15,6 +15,21 @@ install_plugin() {
+ }
+ install_plugin armada-control /packages/decky-dist
+ install_plugin armada-store /packages/decky-store-dist
++
++# adreno-uv: the Odin 3 GPU undervolt. Its module comes from the kernel package,
++# built against this exact kernel; bin/ links to it instead of carrying a copy,
++# so the plugin can never insmod a module built for another kernel.
++install_plugin adreno-uv /packages/adreno-uv-dist
++uv=/usr/share/decky-plugins/adreno-uv
++install -d -m 0755 "${uv}/bin"
++install -m 0755 /ctx/decky/adreno-uv/bin/load.sh /ctx/decky/adreno-uv/bin/autotune.py \
++    /packages/adreno-uv-stress/gpustress "${uv}/bin/"
++uv_ko=(/usr/lib/modules/*/extra/a6xx_uv.ko*)
++[[ ${#uv_ko[@]} -eq 1 && -f "${uv_ko[0]}" ]] || {
++    echo "ERROR: expected exactly one a6xx_uv module, found: ${uv_ko[*]}" >&2
++    exit 1
++}
++ln -s "${uv_ko[0]}" "${uv}/bin/a6xx_uv.ko"
+ chmod 0755 /usr/lib/decky-loader/armada-decky-sync
+ 
+ decky_release="$(
