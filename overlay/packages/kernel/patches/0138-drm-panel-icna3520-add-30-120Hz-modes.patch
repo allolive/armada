@@ -1,4 +1,4 @@
-From: Armada <noreply@armada.local>
+From: allolive <160342668+allolive@users.noreply.github.com>
 Subject: [PATCH] drm/panel: icna3520: add 30..120Hz modes
 
 The ICNA3520 is a command-mode panel, so DRM mode timings do not drive scanout

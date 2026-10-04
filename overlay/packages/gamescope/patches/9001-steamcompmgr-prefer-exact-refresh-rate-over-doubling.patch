@@ -1,4 +1,4 @@
-From: Armada <noreply@armada.local>
+From: allolive <160342668+allolive@users.noreply.github.com>
 Subject: [PATCH] steamcompmgr: prefer an exact refresh rate over refresh doubling
 
 _update_app_target_refresh_cycle() picks the panel rate by walking the valid

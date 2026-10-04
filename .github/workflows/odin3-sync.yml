@@ -48,8 +48,29 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: .odin3
-          fetch-depth: 1
+          fetch-depth: 0              # the attribution check reads every commit
           persist-credentials: false
+
+      # Standing rule: this work ships under the owner's name alone. Commit
+      # messages and patch headers (a patch's From:/Subject:/body is a commit
+      # message too) must carry no AI attribution. Local hooks enforce the same;
+      # this catches anything pushed past them. .github/ is not scanned because
+      # this file has to spell the pattern out.
+      - name: Refuse AI attribution
+        working-directory: .odin3
+        run: |
+          set -euo pipefail
+          pattern='co-authored-by|claude|anthropic|generated with'
+          bad=0
+          if git log --format='%h %B' | grep -inE "${pattern}"; then
+            echo "::error::an odin3 commit message carries attribution"
+            bad=1
+          fi
+          if grep -rinE "${pattern}" overlay tree-patches kernel-series.append scripts README.md; then
+            echo "::error::a file on odin3 carries attribution"
+            bad=1
+          fi
+          exit "${bad}"
 
       - name: Mirror upstream
         id: mirror
