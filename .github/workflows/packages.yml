@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      packages: read
+      packages: write  # copies unchanged packages from upstream
     outputs:
       matrix: ${{ steps.resolve.outputs.matrix }}
       build_args: ${{ steps.resolve.outputs.build_args }}
@@ -59,8 +59,19 @@ jobs:
               *)                            runner=ubuntu-24.04-arm ;;
             esac
 
+            # A fork reuses upstream's build of any package whose sources it has
+            # not changed: same content hash, same inputs. Only what we patch
+            # gets built here.
+            upstream_ref="ghcr.io/armada-os/armada/pkg/${pkg}:${hash}"
             if skopeo inspect --raw "docker://${ref}" >/dev/null 2>&1; then
               echo "::notice::${pkg} already built (${hash})"
+            # Upstream is read anonymously: with this repository's token, ghcr
+            # denies most of another owner's packages instead of treating the
+            # request as a public pull.
+            elif [ "${ref}" != "${upstream_ref}" ] &&
+                 skopeo inspect --no-creds --raw "docker://${upstream_ref}" >/dev/null 2>&1 &&
+                 skopeo copy --all --src-no-creds "docker://${upstream_ref}" "docker://${ref}"; then
+              echo "::notice::${pkg} copied from upstream (${hash})"
             else
               echo "::notice::${pkg} needs building (${hash})"
               matrix="$(jq -c --arg p "${pkg}" --arg r "${runner}" --arg h "${hash}" \

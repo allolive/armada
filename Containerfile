@@ -94,6 +94,21 @@ COPY decky/armada-store/package.json decky/armada-store/package-lock.json ./
 RUN npm ci
 COPY decky/armada-store/ ./
 RUN npm run build
+# adreno-uv has no lockfile yet, so its transitive dependencies resolve at build
+# time; its direct ones are pinned exactly in package.json.
+WORKDIR /build/adreno-uv
+COPY decky/adreno-uv/package.json ./
+RUN npm install --no-audit --no-fund
+COPY decky/adreno-uv/ ./
+RUN npm run build
+
+# gpustress, the auto-tuner's load generator. Built against the base image's
+# Mesa headers; at runtime it links the image's libEGL/libGLESv2/libgbm.
+FROM ${BASE_IMAGE} AS adreno-uv-stress
+COPY decky/adreno-uv/stress/gpustress.c /build/
+RUN dnf -y install gcc libglvnd-devel mesa-libEGL-devel mesa-libgbm-devel && \
+    mkdir -p /out && \
+    gcc -O2 -Wall -o /out/gpustress /build/gpustress.c -lEGL -lGLESv2 -lgbm
 
 FROM scratch AS ctx
 COPY abl /abl/
@@ -134,6 +149,8 @@ RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=bind,from=decky-build,source=/build/armada-control/dist,target=/packages/decky-dist \
     --mount=type=bind,from=decky-build,source=/build/armada-store/dist,target=/packages/decky-store-dist \
     --mount=type=bind,from=armada-aurora,source=/rpms,target=/packages/armada-aurora \
+    --mount=type=bind,from=decky-build,source=/build/adreno-uv/dist,target=/packages/adreno-uv-dist \
+    --mount=type=bind,from=adreno-uv-stress,source=/out,target=/packages/adreno-uv-stress \
     --mount=type=cache,dst=/var/cache \
     --mount=type=cache,dst=/var/log \
     --mount=type=tmpfs,dst=/tmp \

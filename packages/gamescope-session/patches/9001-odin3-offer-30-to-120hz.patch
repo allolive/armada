@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: allolive <160342668+allolive@users.noreply.github.com>
+Date: Sun, 4 Oct 2026 00:00:00 +0200
+Subject: [PATCH] Odin 3: offer every refresh rate from 30 to 120Hz
+
+The odin3 kernel adds an ICNA3520 mode for each integer rate from 30 to
+120Hz (patch 0138), so the panel can run at any of them natively. The quirk
+pinned the Odin 3 to 60 and 120, which left those modes unused.
+
+This is what ran on the device from 2026-08-12 as a user environment.d
+override; it moves into the session so the image carries it.
+---
+--- a/usr/share/gamescope-session-plus/device-quirks
++++ b/usr/share/gamescope-session-plus/device-quirks
+@@ -307,11 +307,13 @@
+ 
+ if [[ ":AYN Odin 3:" =~ ":$SYS_ID:" ]]; then
+   ORIENTATION=right
+-  CUSTOM_REFRESH_RATES=60,120
++  # The odin3 kernel carries a 30..120Hz mode for every integer rate (patch
++  # 0138), so the whole range is real panel modes rather than generated ones.
++  CUSTOM_REFRESH_RATES=30-120
+   OUTPUT_CONNECTOR='*,DSI-1'
+   FAKE_OUTPUT_MM=177x100
+ 
+-  export STEAM_DISPLAY_REFRESH_LIMITS=60,120
++  export STEAM_DISPLAY_REFRESH_LIMITS=30,120
+ fi
+ 
+ if [[ ":AYN Thor:" =~ ":$SYS_ID:" ]]; then
