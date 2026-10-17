@@ -6,6 +6,15 @@
     ],
     "transports": {
         "docker": {
+            "ghcr.io/allolive/armada": [
+                {
+                    "type": "sigstoreSigned",
+                    "keyPaths": ["/etc/pki/containers/allolive.pub"],
+                    "signedIdentity": {
+                        "type": "matchRepository"
+                    }
+                }
+            ],
             "ghcr.io/virtudude/armada": [
                 {
                     "type": "sigstoreSigned",

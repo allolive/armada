@@ -1,0 +1,6 @@
+{
+  "name": "Adreno Undervolt",
+  "author": "olivier",
+  "flags": ["root"],
+  "api_version": 1
+}
