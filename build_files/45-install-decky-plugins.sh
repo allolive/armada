@@ -15,6 +15,21 @@ install_plugin() {
 }
 install_plugin armada-control /packages/decky-dist
 install_plugin armada-store /packages/decky-store-dist
+
+# adreno-uv: the Odin 3 GPU undervolt. Its module comes from the kernel package,
+# built against this exact kernel; bin/ links to it instead of carrying a copy,
+# so the plugin can never insmod a module built for another kernel.
+install_plugin adreno-uv /packages/adreno-uv-dist
+uv=/usr/share/decky-plugins/adreno-uv
+install -d -m 0755 "${uv}/bin"
+install -m 0755 /ctx/decky/adreno-uv/bin/load.sh /ctx/decky/adreno-uv/bin/autotune.py \
+    /packages/adreno-uv-stress/gpustress "${uv}/bin/"
+uv_ko=(/usr/lib/modules/*/extra/a6xx_uv.ko*)
+[[ ${#uv_ko[@]} -eq 1 && -f "${uv_ko[0]}" ]] || {
+    echo "ERROR: expected exactly one a6xx_uv module, found: ${uv_ko[*]}" >&2
+    exit 1
+}
+ln -s "${uv_ko[0]}" "${uv}/bin/a6xx_uv.ko"
 chmod 0755 /usr/lib/decky-loader/armada-decky-sync
 
 decky_release="$(

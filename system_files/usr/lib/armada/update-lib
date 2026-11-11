@@ -3,6 +3,8 @@
 
 ARMADA_CANONICAL_REGISTRY="ghcr.io/armada-os/armada"
 ARMADA_LEGACY_REGISTRY="ghcr.io/virtudude/armada"
+# Our fork. Its channels work like upstream's, so Steam's branch picker applies.
+ARMADA_FORK_REGISTRY="ghcr.io/allolive/armada"
 ARMADA_CHANNEL_STATE="/var/lib/armada/update-channel"
 ARMADA_CHANNELS="stable beta testing"
 ARMADA_OSTREE_REPO="/ostree/repo"
@@ -48,7 +50,7 @@ armada_registry_from_ref() {
     r="${r%%@*}"
     [[ "${r##*/}" == *:* ]] && r="${r%:*}"
     case "$r" in
-        "$ARMADA_CANONICAL_REGISTRY"|"$ARMADA_LEGACY_REGISTRY") echo "$r" ;;
+        "$ARMADA_CANONICAL_REGISTRY"|"$ARMADA_LEGACY_REGISTRY"|"$ARMADA_FORK_REGISTRY") echo "$r" ;;
     esac
 }
 
@@ -70,7 +72,7 @@ armada_repository_from_ref() {
 armada_steam_channels_apply() {
     local channel
     case "$1" in
-        "$ARMADA_CANONICAL_REGISTRY"|"$ARMADA_LEGACY_REGISTRY") ;;
+        "$ARMADA_CANONICAL_REGISTRY"|"$ARMADA_LEGACY_REGISTRY"|"$ARMADA_FORK_REGISTRY") ;;
         *) return 1 ;;
     esac
     for channel in ${ARMADA_CHANNELS}; do
@@ -260,7 +262,7 @@ armada_update_target() {
     if repository="$(armada_repository_from_ref "$ref")"; then
         if [[ -z "$booted" ]]; then
             case "$repository" in
-                "$ARMADA_CANONICAL_REGISTRY"|"$ARMADA_LEGACY_REGISTRY") ;;
+                "$ARMADA_CANONICAL_REGISTRY"|"$ARMADA_LEGACY_REGISTRY"|"$ARMADA_FORK_REGISTRY") ;;
                 *) return 1 ;;
             esac
         fi

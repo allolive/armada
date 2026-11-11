@@ -3,3 +3,5 @@ docker:
     use-sigstore-attachments: true
   ghcr.io/armada-os/armada:
     use-sigstore-attachments: true
+  ghcr.io/allolive/armada:
+    use-sigstore-attachments: true
