@@ -62,65 +62,86 @@ rate that is an integer multiple of the target FPS, so advertising everything
 makes 50fps select 100Hz and 30fps select 120Hz. Keep the advertised list
 curated or apply the gamescope patch preferring an exact rate.
 
-The 0xB3 write moves to mipi_dsi_generic_write_multi() because the _seq_ macro
-stashes its varargs in a `static const u8[]` and cannot carry a runtime value.
+== Calibration (rebased onto 0518/0518a/0518b) ==
+
+Upstream made the 60Hz front porch a per-panel calibration, frame_len_60,
+defaulting to 2006 and writable at runtime. The porch for a mode below 120Hz
+now comes from the active mode (panel_info.vfp), and frame_len_60 is kept as an
+offset from its stock 2006: unchanged it writes exactly the mode's own porch,
+and a calibrated panel shifts every rate by the same number of lines. Its sysfs
+store now writes live whenever the panel is not at 120Hz, not only at exactly
+60, since 59 and 61Hz are now distinct modes.
 
 Unverified: 0x48 is 0x00 at 120Hz and 0x10 below it, assumed a generic
 low-refresh select rather than 60Hz-specific, and reused as-is.
 
 --- a/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
 +++ b/drivers/gpu/drm/panel/panel-chipone-icna35xx.c
-@@ -200,7 +200,8 @@
- 	u8 bl_payload[] = { 0x51, brightness >> 8, brightness & 0xff };
+@@ -39,6 +39,8 @@ struct panel_info {
+ 	bool enabled;
  
- 	int cur_mode = icna35xx_get_current_mode(pinfo);
--	int cur_vrefresh = drm_mode_vrefresh(&pinfo->desc->modes[cur_mode]);
-+	const struct drm_display_mode *cur = &pinfo->desc->modes[cur_mode];
-+	int cur_vrefresh = drm_mode_vrefresh(cur);
+ 	int vrefresh;
++	/* Vertical front porch of the active mode, for rates below 120Hz. */
++	u16 vfp;
+ 	u16 frame_len_120;
+ 	u16 frame_len_60;
+ 	/* Set while the panel is off; enable() writes the cached values. */
+@@ -232,9 +234,22 @@ static int icna3512_init_sequence(struct panel_info *pinfo)
+ 	return dsi_ctx.accum_err;
+ }
  
- 	pinfo->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
- 
-@@ -221,11 +222,22 @@
-                 0x00, 0xD8, 0x00, 0x1C, 0x00, 0x4C);
- 	}
- 	else {
-+		/*
-+		 * Bytes 12..13 of 0xB3 are the front porch the DDIC derives its
-+		 * refresh from. Measured on an Odin 3: 50, 75 and 100Hz all land
-+		 * exactly, so the relationship is linear across the range.
-+		 */
-+		u16 vfp = cur->vsync_start - cur->vdisplay;
-+		u8 b3_payload[] = {
-+			0xB3,
-+			0x00, 0xDB, 0x00, 0x1C, 0x00, 0x1C, 0x00, 0x00,
-+			0xDB, 0x00, 0x1C, (u8)(vfp >> 8), (u8)(vfp & 0xff), 0x00
-+		};
++/* frame_len_60 as shipped: the 60Hz mode's front porch (0x7D6 == 2006). */
++#define ICNA3520_FRAME_LEN_60_STOCK	0x7D6
 +
- 		mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x48, 0x10);
- 		mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x00);
--		mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xB3, 
--                0x00, 0xDB, 0x00, 0x1C, 0x00, 0x1C, 0x00, 0x00,
--				0xDB, 0x00, 0x1C, 0x07, 0xD6, 0x00);
-+		mipi_dsi_generic_write_multi(&dsi_ctx, b3_payload,
-+					     sizeof(b3_payload));
- 	}
+ static void icna3520_set_frame_len(struct mipi_dsi_multi_context *dsi_ctx,
+ 				   struct panel_info *pinfo)
+ {
++	/*
++	 * Below 120Hz the DDIC derives its refresh from bytes 12..13 of 0xB3,
++	 * the front porch: vfp = round(267911000 / (1129 * rate)) - 1949. That
++	 * comes from the active mode, so every rate in icna3520_modes[] works.
++	 * The frame_len_60 calibration is kept as an offset from its stock value,
++	 * so a calibrated panel moves every rate by the same number of lines and
++	 * an uncalibrated one writes exactly the mode's own porch.
++	 */
++	u16 vfp = pinfo->vfp + (int)pinfo->frame_len_60 -
++		  ICNA3520_FRAME_LEN_60_STOCK;
+ 	u8 payload_120[] = {
+ 		0xB3,
+ 		0x00, 0xD8, 0x00, 0x1C,
+@@ -244,7 +259,7 @@ static void icna3520_set_frame_len(struct mipi_dsi_multi_context *dsi_ctx,
+ 		0xB3,
+ 		0x00, 0xDB, 0x00, 0x1C, 0x00, 0x1C, 0x00,
+ 		0x00, 0xDB, 0x00, 0x1C,
+-		pinfo->frame_len_60 >> 8, pinfo->frame_len_60 & 0xff, 0x00,
++		vfp >> 8, vfp & 0xff, 0x00,
+ 	};
  
- 	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0x9F, 0x01);
-@@ -387,31 +399,127 @@
+ 	if (pinfo->vrefresh == 120) {
+@@ -300,6 +315,8 @@ static int icna3520_init_sequence(struct panel_info *pinfo)
+ 	mipi_dsi_msleep(&dsi_ctx, 120);
+ 
+ 	pinfo->vrefresh = cur_vrefresh;
++	pinfo->vfp = pinfo->desc->modes[cur_mode].vsync_start -
++		     pinfo->desc->modes[cur_mode].vdisplay;
+ 	scoped_guard(mutex, &pinfo->lock)
+ 		icna3520_set_frame_len(&dsi_ctx, pinfo);
+ 
+@@ -462,31 +479,127 @@ static const struct drm_display_mode icna3512_modes[] = {
  	}
  };
  
 +/*
 + * Every rate is the same pixel clock with a stretched vertical front porch;
-+ * the DDIC derives its refresh from that porch (see icna3520_init_sequence):
++ * the DDIC derives its refresh from that porch (see icna3520_set_frame_len):
 + *     vfp = round(267911000 / (1129 * rate)) - 1949
 + *
 + * Constraint found on hardware: a front porch congruent to 2 mod 4 (vtotal
 + * congruent to 3 mod 4) makes the panel render elevated black levels.
 + * Confirmed bad at 31, 33, 34, 43, 46, 49, 52, 55, 57, 58, 62, 63, 72, 73,
 + * 74, 83 and 86Hz; every rate tested outside the class is clean. 60Hz is the
-+ * sole exception -- it sits in the class and looks fine, which fits the else
-+ * branch of the init sequence writing the vendor's 60Hz calibration. vtotal
++ * sole exception -- it sits in the class and looks fine, which fits the below-120Hz
++ * branch writing the vendor's 60Hz calibration. vtotal
 + * is nudged one line to avoid the class, costing at most 1.6ppm.
 + *
 + * Two slots carry an NTSC rate rather than the exact integer so film and
@@ -258,3 +279,13 @@ low-refresh select rather than 60Hz-specific, and reused as-is.
  };
  
  static const struct drm_display_mode mangmi_pocket_max_modes[] = {
+@@ -870,7 +983,8 @@ static ssize_t icna3520_frame_len_store(struct device *dev, u16 *frame_len,
+ 		pinfo->frame_len_pending = true;
+ 		return count;
+ 	}
+-	if (pinfo->vrefresh != vrefresh)
++	/* frame_len_60 governs every rate below 120Hz, not just exactly 60. */
++	if ((pinfo->vrefresh == 120) != (vrefresh == 120))
+ 		return count;
+ 
+ 	ret = icna35xx_write_frame_len(pinfo);

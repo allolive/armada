@@ -18,7 +18,9 @@ On a battery-powered handheld the other side of that trade is often preferred
 asking for 60 generally means the panel too. Take an exact rate when the panel
 has one natively, and fall back to doubling otherwise.
 
-Gated on a ConVar defaulting to true, so the old behaviour is one runtime
+Upstream's 0032 does this for refresh-only requests (Steam's refresh slider),
+and keeps doubling for frame limits. This extends it to frame limits too, so a
+60fps cap gives a 60Hz panel. Gated on a ConVar defaulting to true, so the old behaviour is one runtime
 command away and the two can be A/B compared without a rebuild:
 
     gamescopectl prefer_exact_refresh_rate 0
@@ -29,10 +31,7 @@ because it is not a divisor of 120, so only 60 and 40 change behaviour.
 
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -956,12 +956,20 @@
- static const uint64_t g_uDynamicRefreshDelay = 600'000'000; // 600ms
- 
- static int g_nCombinedAppRefreshCycleOverride[gamescope::GAMESCOPE_SCREEN_TYPE_COUNT] = { 0, 0 };
+@@ -1263,6 +1263,14 @@ static int g_nCombinedAppRefreshCycleOverride[gamescope::GAMESCOPE_SCREEN_TYPE_C
  bool g_nCombinedAppRefreshCycleChangeRefresh[gamescope::GAMESCOPE_SCREEN_TYPE_COUNT] = { true, true };
  bool g_nCombinedAppRefreshCycleChangeFPS[gamescope::GAMESCOPE_SCREEN_TYPE_COUNT] = { true, true };
  
@@ -47,21 +46,16 @@ because it is not a divisor of 120, so only 60 and 40 change behaviour.
  static void _update_app_target_refresh_cycle()
  {
  	if ( !GetBackend()->GetCurrentConnector() )
- 		return;
- 
- 	gamescope::GamescopeScreenType type = GetBackend()->GetCurrentConnector()->GetScreenType();
-@@ -982,13 +990,22 @@
- 	}
- 
- 	if ( g_nCombinedAppRefreshCycleChangeRefresh[ type ] )
- 	{
- 		auto rates = GetBackend()->GetCurrentConnector()->GetValidDynamicRefreshRates();
+@@ -1297,7 +1305,17 @@ static void _update_app_target_refresh_cycle()
+ 			return;
+ 		}
  
 -		// Find highest mode to do refresh doubling with.
 +		// An exact match is what the user literally asked for; take it if the
-+		// panel supports that rate natively.
++		// panel supports that rate natively, for frame limits as well as
++		// refresh-only requests (the block above covers only the latter).
 +		if ( cv_prefer_exact_refresh_rate &&
-+		     gamescope::Algorithm::Contains( rates, uint32_t( target_fps ) ) )
++			std::find( rates.begin(), rates.end(), uint32_t( target_fps ) ) != rates.end() )
 +		{
 +			g_nDynamicRefreshRate[ type ] = target_fps;
 +			return;
@@ -71,6 +65,3 @@ because it is not a divisor of 120, so only 60 and 40 change behaviour.
  		for ( auto rate = rates.rbegin(); rate != rates.rend(); rate++ )
  		{
  			if (*rate % target_fps == 0)
- 			{
- 				g_nDynamicRefreshRate[ type ] = *rate;
- 				return;
